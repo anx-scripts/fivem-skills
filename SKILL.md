@@ -15,7 +15,7 @@ The CLI is meant to be installed globally. If `fivem-skills` is not on PATH, tel
 the user and offer to install it:
 
 ```
-bun add -g github:aNNexatioN/fivem-skills   # or: npm install -g github:aNNexatioN/fivem-skills
+bun add -g @anx-scripts/fivem-skills   # or: npm install -g @anx-scripts/fivem-skills
 fivem-skills pull                           # download the doc mirrors (~8 MB, needs git)
 ```
 
