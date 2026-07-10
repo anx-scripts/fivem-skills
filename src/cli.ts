@@ -1,26 +1,44 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { DATA_DIR, SOURCES_FILE, VERSION } from "./constants";
-import { BUILTIN_SOURCES, findSource, getAllSources, getUserSources, saveUserSources, type Source } from "./sources";
+import { DATA_DIR, VERSION } from "./constants";
+import { findSource, SOURCES } from "./sources";
 import { countFiles, isPulled, lastCommitDate, pullSource } from "./pull";
-import { searchSources } from "./search";
+import { searchSources, splitTerms } from "./search";
+import { resolveShow } from "./show";
+import { bold, cyan, dim, green, red, yellow } from "./term";
 
-const HELP = `fivem-skills v${VERSION} — lokalne mirrory dokumentacji FiveM + wyszukiwarka
+const sourceLines = SOURCES.map(
+  (s) => `  ${s.name.padEnd(9)}${s.description.padEnd(52)}${s.repo}`,
+).join("\n");
 
-Użycie:
-  fivem-skills pull [źródło...]         Pobierz/zaktualizuj źródła (domyślnie wszystkie)
-  fivem-skills search <fraza> [opcje]   Przeszukaj pobrane dokumenty
-  fivem-skills list                     Pokaż źródła i ich status
-  fivem-skills sources add <nazwa> <owner/repo> [--subpath <ścieżka>] [--ext .md,.mdx] [--desc <opis>]
-  fivem-skills sources remove <nazwa>   Usuń źródło użytkownika
+const HELP = `fivem-skills v${VERSION} — local FiveM documentation mirrors with offline search
 
-Opcje search:
-  -s, --source <nazwa>   Ogranicz do jednego źródła (docs | natives | ox | ...)
-  -e, --regex            Traktuj frazę jako wyrażenie regularne
-  -c, --case-sensitive   Rozróżniaj wielkość liter
-  -l, --limit <n>        Maks. liczba plików w wynikach (domyślnie 20)
+Usage:
+  fivem-skills pull [source...]        Download or update sources (default: all)
+  fivem-skills search <query> [opts]   Search the downloaded docs
+  fivem-skills show <path|name>...     Print full doc files
+  fivem-skills list                    Show sources and their status
 
-Dane trafiają do: ${DATA_DIR}`;
+Sources:
+${sourceLines}
+
+Search options:
+  -s, --source <name>    Limit to one source: ${SOURCES.map((s) => s.name).join(" | ")}
+  -e, --regex            Treat the whole query as a regular expression
+  -c, --case-sensitive   Match case exactly
+  -l, --limit <n>        Max files in results (default 20)
+
+Matching rules:
+  - multiple words = AND: every word must appear in the file (name or content)
+  - words are also split on camelCase boundaries: SafePed ≡ safe ped
+  - native names are normalized: GET_PLAYER_PED finds GetPlayerPed.md
+  - ranking: exact file name > partial file name > content-only matches
+
+Show:
+  fivem-skills show natives/PATHFIND/GetSafeCoordForPed.md   # path from search results
+  fivem-skills show GetSafeCoordForPed                       # bare native/file name works too
+
+Data root: ${DATA_DIR}`;
 
 function fail(message: string): never {
   console.error(message);
@@ -28,16 +46,37 @@ function fail(message: string): never {
 }
 
 function cmdPull(args: string[]): void {
-  const all = getAllSources();
-  const targets = args.length === 0 ? all : args.map((name) => findSource(name) ?? fail(`Nieznane źródło: ${name}. Dostępne: ${all.map((s) => s.name).join(", ")}`));
+  const targets = args.length === 0 ? SOURCES : args.map((name) => findSource(name) ?? fail(`Unknown source: ${name}. Available: ${SOURCES.map((s) => s.name).join(", ")}`));
 
   for (const src of targets) {
-    const verb = isPulled(src) ? "Aktualizuję" : "Pobieram";
-    console.log(`${verb} ${src.name} (${src.repo}${src.subpath ? `/${src.subpath}` : ""})...`);
+    const wasPulled = isPulled(src);
+    console.log(`${wasPulled ? "Updating" : "Cloning"} ${bold(src.name)} ${dim(`(${src.repo}${src.subpath ? `/${src.subpath}` : ""})`)}`);
     const { updated, rev } = pullSource(src);
-    const files = countFiles(src);
-    console.log(`  ${updated ? "OK" : "Bez zmian"} @ ${rev}, plików: ${files}`);
+    const status = !wasPulled
+      ? green(`cloned @ ${rev}`)
+      : updated
+        ? green(`updated @ ${rev}`)
+        : dim(`already up to date @ ${rev}`);
+    console.log(`  ${status}${dim(`, ${countFiles(src)} files`)}`);
   }
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Regex matching every query term, used to highlight hits in printed lines. */
+function buildHighlightRegex(query: string, regexMode: boolean, caseSensitive: boolean): RegExp | null {
+  const flags = caseSensitive ? "g" : "gi";
+  if (regexMode) {
+    try {
+      return new RegExp(query, flags);
+    } catch {
+      return null;
+    }
+  }
+  const terms = splitTerms(query).map(escapeRegExp);
+  return terms.length > 0 ? new RegExp(terms.join("|"), flags) : null;
 }
 
 function cmdSearch(args: string[]): void {
@@ -53,25 +92,25 @@ function cmdSearch(args: string[]): void {
   });
 
   const query = positionals.join(" ").trim();
-  if (!query) fail("Podaj frazę do wyszukania, np.: fivem-skills search GetPlayerPed");
+  if (!query) fail("Provide a search query, e.g.: fivem-skills search GetPlayerPed");
 
-  let sources = getAllSources();
+  let sources = SOURCES;
   if (values.source) {
     const src = findSource(values.source);
-    if (!src) fail(`Nieznane źródło: ${values.source}. Dostępne: ${sources.map((s) => s.name).join(", ")}`);
+    if (!src) fail(`Unknown source: ${values.source}. Available: ${SOURCES.map((s) => s.name).join(", ")}`);
     sources = [src];
   }
 
   const notPulled = sources.filter((s) => !isPulled(s));
   if (notPulled.length === sources.length) {
-    fail(`Brak pobranych danych. Najpierw uruchom: fivem-skills pull`);
+    fail("No data downloaded yet. Run: fivem-skills pull");
   }
   for (const s of notPulled) {
-    console.error(`Uwaga: źródło "${s.name}" nie jest pobrane (fivem-skills pull ${s.name}) — pomijam.`);
+    console.error(red(`Warning: source "${s.name}" is not pulled (fivem-skills pull ${s.name}) — skipping.`));
   }
 
   const limit = Number.parseInt(values.limit, 10);
-  if (Number.isNaN(limit) || limit < 1) fail(`Nieprawidłowy limit: ${values.limit}`);
+  if (Number.isNaN(limit) || limit < 1) fail(`Invalid limit: ${values.limit}`);
 
   const results = searchSources(sources.filter(isPulled), query, {
     regex: values.regex,
@@ -81,71 +120,61 @@ function cmdSearch(args: string[]): void {
   });
 
   if (results.length === 0) {
-    console.log(`Brak wyników dla: ${query}`);
+    console.log(`No results for "${query}". Try fewer or shorter words, or -e for regex.`);
     return;
   }
 
-  console.log(`Katalog danych: ${DATA_DIR}\n`);
+  const highlightRe = buildHighlightRegex(query, values.regex, values["case-sensitive"]);
   for (const match of results) {
-    console.log(`${match.path}${match.nameMatch ? "  (nazwa pliku)" : ""}`);
+    const label = match.nameMatch ? `  ${green("(file name match)")}` : "";
+    console.log(`${cyan(bold(match.path))}${label}`);
+
+    const numWidth = Math.max(...match.lines.map((l) => String(l.line).length), 1);
     for (const { line, text } of match.lines) {
-      console.log(`  ${line}: ${text}`);
+      const shown = highlightRe ? text.replace(highlightRe, (m) => yellow(bold(m))) : text;
+      console.log(`  ${dim(String(line).padStart(numWidth))} ${dim("|")} ${shown}`);
     }
+    if (match.totalHits > match.lines.length) {
+      console.log(`  ${dim(`+ ${match.totalHits - match.lines.length} more matching lines`)}`);
+    }
+    console.log();
   }
-  console.log(`\nPlików z trafieniami: ${results.length}${results.length === limit ? ` (limit ${limit} — zawęź frazę lub zwiększ -l)` : ""}`);
+
+  const limitNote = results.length === limit ? ` — limit reached, narrow the query or raise -l` : "";
+  console.log(dim(`${results.length} file(s) matched${limitNote} · full file: fivem-skills show <path>`));
+}
+
+function cmdShow(args: string[]): void {
+  if (args.length === 0) {
+    fail("Provide a file path or name, e.g.: fivem-skills show GetSafeCoordForPed");
+  }
+  for (const arg of args) {
+    const result = resolveShow(arg);
+    if (result.kind === "not-found") {
+      fail(`No file matches "${arg}". Find one with: fivem-skills search ${arg}`);
+    }
+    if (result.kind === "ambiguous") {
+      console.log(`Multiple files match "${arg}" — pass a full path:`);
+      for (const candidate of result.candidates) console.log(`  ${cyan(candidate)}`);
+      continue;
+    }
+    console.log(cyan(bold(result.path)));
+    console.log(result.content);
+  }
 }
 
 function cmdList(): void {
-  console.log(`Katalog danych: ${DATA_DIR}\n`);
-  const userNames = new Set(getUserSources().map((s) => s.name));
-  for (const src of getAllSources()) {
-    const origin = userNames.has(src.name) ? "użytkownika" : "wbudowane";
+  console.log(dim(`Data root: ${DATA_DIR}`));
+  console.log();
+
+  const nameWidth = Math.max(...SOURCES.map((s) => s.name.length)) + 2;
+  const statusWidth = 24;
+  for (const src of SOURCES) {
     const status = isPulled(src)
-      ? `pobrane, plików: ${countFiles(src)}, ostatni commit: ${lastCommitDate(src)}`
-      : "nie pobrane";
-    console.log(`${src.name}  [${origin}]  ${src.repo}${src.subpath ? `/${src.subpath}` : ""}`);
-    console.log(`  ${src.description}`);
-    console.log(`  ${status}\n`);
-  }
-}
-
-function cmdSources(args: string[]): void {
-  const action = args[0];
-  if (action === "add") {
-    const { values, positionals } = parseArgs({
-      args: args.slice(1),
-      allowPositionals: true,
-      options: {
-        subpath: { type: "string" },
-        ext: { type: "string", default: ".md,.mdx" },
-        desc: { type: "string", default: "" },
-      },
-    });
-    const [name, repo] = positionals;
-    if (!name || !repo) fail("Użycie: fivem-skills sources add <nazwa> <owner/repo> [--subpath ...] [--ext .md,.mdx] [--desc ...]");
-    if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) fail(`Nieprawidłowy format repo (oczekiwano owner/repo): ${repo}`);
-    if (BUILTIN_SOURCES.some((s) => s.name === name)) fail(`Nazwa "${name}" jest zajęta przez źródło wbudowane.`);
-
-    const source: Source = {
-      name,
-      repo,
-      subpath: values.subpath,
-      extensions: values.ext.split(",").map((e) => (e.startsWith(".") ? e : `.${e}`)),
-      description: values.desc,
-    };
-    const user = getUserSources().filter((s) => s.name !== name);
-    user.push(source);
-    saveUserSources(user);
-    console.log(`Dodano źródło "${name}" (${SOURCES_FILE}). Pobierz je: fivem-skills pull ${name}`);
-  } else if (action === "remove") {
-    const name = args[1];
-    if (!name) fail("Użycie: fivem-skills sources remove <nazwa>");
-    const user = getUserSources();
-    if (!user.some((s) => s.name === name)) fail(`Brak źródła użytkownika o nazwie "${name}".`);
-    saveUserSources(user.filter((s) => s.name !== name));
-    console.log(`Usunięto źródło "${name}". Dane w ${DATA_DIR} pozostały — usuń je ręcznie, jeśli chcesz.`);
-  } else {
-    fail("Użycie: fivem-skills sources <add|remove> ...");
+      ? `${String(countFiles(src)).padStart(5)} files   ${lastCommitDate(src)}`
+      : red("not pulled".padEnd(statusWidth));
+    const repoPath = `${src.repo}${src.subpath ? `/${src.subpath}` : ""}`;
+    console.log(`${bold(src.name.padEnd(nameWidth))}${status.padEnd(statusWidth)}   ${dim(repoPath)}`);
   }
 }
 
@@ -156,10 +185,10 @@ function main(): void {
       return cmdPull(rest);
     case "search":
       return cmdSearch(rest);
+    case "show":
+      return cmdShow(rest);
     case "list":
       return cmdList();
-    case "sources":
-      return cmdSources(rest);
     case "--version":
     case "-v":
       return void console.log(VERSION);
@@ -169,7 +198,7 @@ function main(): void {
     case undefined:
       return void console.log(HELP);
     default:
-      fail(`Nieznana komenda: ${command}\n\n${HELP}`);
+      fail(`Unknown command: ${command}\n\n${HELP}`);
   }
 }
 

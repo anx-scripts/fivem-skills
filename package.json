@@ -1,7 +1,7 @@
 {
   "name": "fivem-skills",
-  "version": "0.1.0",
-  "description": "Lokalne mirrory dokumentacji FiveM (docs, natives, Overextended) + wyszukiwarka CLI",
+  "version": "0.4.0",
+  "description": "Local FiveM documentation mirrors (docs, natives, Overextended) with offline search CLI",
   "type": "module",
   "bin": {
     "fivem-skills": "./dist/cli.cjs"

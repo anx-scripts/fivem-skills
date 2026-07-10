@@ -6,83 +6,54 @@ var import_node_util = require("node:util");
 // src/constants.ts
 var import_node_os = require("node:os");
 var import_node_path = require("node:path");
-var VERSION = "0.1.0";
+var VERSION = "0.4.0";
 var ROOT_DIR = import_node_path.join(import_node_os.homedir(), ".fivem-skills");
 var DATA_DIR = import_node_path.join(ROOT_DIR, "data");
-var SOURCES_FILE = import_node_path.join(ROOT_DIR, "sources.json");
 
 // src/sources.ts
-var import_node_fs = require("node:fs");
-var BUILTIN_SOURCES = [
+var SOURCES = [
   {
     name: "docs",
     repo: "citizenfx/fivem-docs",
     subpath: "content/docs",
     extensions: [".md"],
-    description: "Oficjalna dokumentacja FiveM"
+    description: "Official FiveM documentation"
   },
   {
     name: "natives",
     repo: "citizenfx/natives",
     extensions: [".md"],
-    description: "Natywne funkcje FiveM / GTA V / RDR3"
+    description: "FiveM / GTA V / RDR3 native functions"
   },
   {
     name: "ox",
     repo: "overextended/overextended.github.io",
     subpath: "content/docs",
     extensions: [".mdx", ".md"],
-    description: "Dokumentacja zasobów Overextended (ox_lib, ox_inventory, ...)"
+    description: "Overextended docs (ox_lib, ox_inventory, ...)"
   }
 ];
-function loadUserSources() {
-  if (!import_node_fs.existsSync(SOURCES_FILE))
-    return [];
-  try {
-    const parsed = JSON.parse(import_node_fs.readFileSync(SOURCES_FILE, "utf8"));
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    console.error(`Uwaga: nie udało się sparsować ${SOURCES_FILE} — pomijam źródła użytkownika.`);
-    return [];
-  }
-}
-function saveUserSources(sources) {
-  import_node_fs.mkdirSync(ROOT_DIR, { recursive: true });
-  import_node_fs.writeFileSync(SOURCES_FILE, JSON.stringify(sources, null, 2) + `
-`);
-}
-function getUserSources() {
-  return loadUserSources();
-}
-function getAllSources() {
-  const byName = new Map;
-  for (const s of BUILTIN_SOURCES)
-    byName.set(s.name, s);
-  for (const s of loadUserSources())
-    byName.set(s.name, s);
-  return [...byName.values()];
-}
 function findSource(name) {
-  return getAllSources().find((s) => s.name === name);
+  return SOURCES.find((s) => s.name === name);
 }
 
 // src/pull.ts
 var import_node_child_process = require("node:child_process");
-var import_node_fs3 = require("node:fs");
+var import_node_fs2 = require("node:fs");
 var import_node_path3 = require("node:path");
 
 // src/search.ts
-var import_node_fs2 = require("node:fs");
+var import_node_fs = require("node:fs");
 var import_node_path2 = require("node:path");
 function* walkFiles(dir, extensions) {
   let entries;
   try {
-    entries = import_node_fs2.readdirSync(dir, { withFileTypes: true });
+    entries = import_node_fs.readdirSync(dir, { withFileTypes: true });
   } catch {
     return;
   }
   for (const entry of entries) {
-    if (entry.name === ".git")
+    if (entry.isDirectory() && entry.name.startsWith("."))
       continue;
     const full = import_node_path2.join(dir, entry.name);
     if (entry.isDirectory()) {
@@ -92,51 +63,95 @@ function* walkFiles(dir, extensions) {
     }
   }
 }
-function buildMatcher(query, opts) {
+function normalizeName(s) {
+  return s.toLowerCase().replace(/[_\s-]/g, "");
+}
+function displayPath(src, file) {
+  const sourceRoot = import_node_path2.join(DATA_DIR, src.name);
+  const contentRoot = src.subpath ? import_node_path2.join(sourceRoot, src.subpath) : sourceRoot;
+  let rel = import_node_path2.relative(contentRoot, file).replaceAll("\\", "/");
+  if (rel.startsWith(".."))
+    rel = import_node_path2.relative(sourceRoot, file).replaceAll("\\", "/");
+  return `${src.name}/${rel}`;
+}
+function splitTerms(query) {
+  return query.split(/\s+/).flatMap((word) => word.split(/(?<=[a-z0-9])(?=[A-Z])/)).filter(Boolean);
+}
+function pickLines(lines, max) {
+  if (lines.length <= max)
+    return lines;
+  const isHeading = (text) => /^#{1,6}\s/.test(text);
+  const headings = lines.filter((l) => isHeading(l.text));
+  const body = lines.filter((l) => !isHeading(l.text));
+  return [...headings, ...body].slice(0, max).sort((a, b) => a.line - b.line);
+}
+function buildMatchers(query, opts) {
   if (opts.regex) {
     const re = new RegExp(query, opts.caseSensitive ? "" : "i");
-    return (text) => re.test(text);
+    return [{ matchesLine: (line) => re.test(line), matchesName: (base) => re.test(base) }];
   }
-  const needle = opts.caseSensitive ? query : query.toLowerCase();
-  return (text) => (opts.caseSensitive ? text : text.toLowerCase()).includes(needle);
+  return splitTerms(query).map((term) => {
+    const needle = opts.caseSensitive ? term : term.toLowerCase();
+    const normNeedle = normalizeName(term);
+    return {
+      matchesLine: (line) => (opts.caseSensitive ? line : line.toLowerCase()).includes(needle),
+      matchesName: (base) => (opts.caseSensitive ? base : base.toLowerCase()).includes(needle) || normNeedle.length > 0 && normalizeName(base).includes(normNeedle)
+    };
+  });
 }
 function searchSources(sources, query, opts) {
-  const matches = buildMatcher(query, opts);
-  const nameHits = [];
-  const contentHits = [];
+  const matchers = buildMatchers(query, opts);
+  const queryNorm = normalizeName(query);
+  const ranked = [];
   for (const src of sources) {
     const dir = import_node_path2.join(DATA_DIR, src.name);
     for (const file of walkFiles(dir, src.extensions)) {
-      const relPath = import_node_path2.relative(DATA_DIR, file).replaceAll("\\", "/");
-      const nameMatch = matches(import_node_path2.basename(file, import_node_path2.extname(file)));
+      const base = import_node_path2.basename(file, import_node_path2.extname(file));
+      const nameHits = matchers.map((m) => m.matchesName(base));
+      const termSeen = [...nameHits];
       const lines = [];
-      const content = import_node_fs2.readFileSync(file, "utf8");
+      let totalHits = 0;
+      const content = import_node_fs.readFileSync(file, "utf8").split(`
+`);
       let lineNo = 0;
-      for (const line of content.split(`
-`)) {
+      for (const lineText of content) {
         lineNo++;
-        if (lines.length >= opts.linesPerFile)
-          break;
-        if (matches(line)) {
-          lines.push({ line: lineNo, text: line.trim().slice(0, 200) });
+        let lineMatched = false;
+        matchers.forEach((matcher, t) => {
+          if (matcher.matchesLine(lineText)) {
+            termSeen[t] = true;
+            lineMatched = true;
+          }
+        });
+        if (lineMatched) {
+          totalHits++;
+          lines.push({ line: lineNo, text: lineText.trim().slice(0, 200) });
         }
       }
-      if (nameMatch)
-        nameHits.push({ path: relPath, nameMatch, lines });
-      else if (lines.length > 0)
-        contentHits.push({ path: relPath, nameMatch, lines });
+      if (!termSeen.every(Boolean))
+        continue;
+      const nameMatch = nameHits.every(Boolean);
+      const rank = normalizeName(base) === queryNorm ? 0 : nameMatch ? 1 : 2;
+      ranked.push({
+        path: displayPath(src, file),
+        nameMatch,
+        totalHits,
+        lines: pickLines(lines, opts.linesPerFile),
+        rank
+      });
     }
   }
-  return [...nameHits, ...contentHits].slice(0, opts.limit);
+  ranked.sort((a, b) => a.rank - b.rank || b.totalHits - a.totalHits || a.path.localeCompare(b.path));
+  return ranked.slice(0, opts.limit).map(({ rank: _rank, ...match }) => match);
 }
 
 // src/pull.ts
 function git(args, cwd) {
   const res = import_node_child_process.spawnSync("git", args, { cwd, encoding: "utf8" });
   if (res.error)
-    throw new Error(`Nie udało się uruchomić git: ${res.error.message}`);
+    throw new Error(`Failed to run git: ${res.error.message}`);
   if (res.status !== 0) {
-    throw new Error(`git ${args.join(" ")} zakończył się błędem:
+    throw new Error(`git ${args.join(" ")} failed:
 ${res.stderr.trim()}`);
   }
   return res.stdout;
@@ -145,7 +160,7 @@ function sourceDir(src) {
   return import_node_path3.join(DATA_DIR, src.name);
 }
 function isPulled(src) {
-  return import_node_fs3.existsSync(import_node_path3.join(sourceDir(src), ".git"));
+  return import_node_fs2.existsSync(import_node_path3.join(sourceDir(src), ".git"));
 }
 function pullSource(src) {
   const dir = sourceDir(src);
@@ -158,7 +173,7 @@ function pullSource(src) {
     const after = git(["rev-parse", "HEAD"], dir).trim();
     return { updated: before !== after, rev: after.slice(0, 7) };
   }
-  import_node_fs3.mkdirSync(DATA_DIR, { recursive: true });
+  import_node_fs2.mkdirSync(DATA_DIR, { recursive: true });
   if (src.subpath) {
     git(["clone", "--depth", "1", "--filter=blob:none", "--sparse", url, dir]);
     git(["sparse-checkout", "set", src.subpath], dir);
@@ -182,37 +197,120 @@ function lastCommitDate(src) {
   }
 }
 
+// src/show.ts
+var import_node_fs3 = require("node:fs");
+var import_node_path4 = require("node:path");
+function resolveShow(arg) {
+  const clean = arg.replaceAll("\\", "/").replace(/^\.?\//, "");
+  if (clean.includes("/")) {
+    const [srcName = "", ...restParts] = clean.split("/");
+    const src = findSource(srcName);
+    if (!src)
+      return { kind: "not-found" };
+    const rest = restParts.join("/");
+    const bases = [
+      import_node_path4.join(sourceDir(src), ...src.subpath ? [src.subpath] : [], rest),
+      import_node_path4.join(sourceDir(src), rest)
+    ];
+    for (const base of bases) {
+      for (const file of [base, ...src.extensions.map((ext) => base + ext)]) {
+        if (import_node_fs3.existsSync(file) && import_node_fs3.statSync(file).isFile()) {
+          return { kind: "file", path: displayPath(src, file), content: import_node_fs3.readFileSync(file, "utf8") };
+        }
+      }
+    }
+    return { kind: "not-found" };
+  }
+  const target = normalizeName(clean);
+  const hits = [];
+  for (const src of SOURCES) {
+    if (!isPulled(src))
+      continue;
+    for (const file of walkFiles(sourceDir(src), src.extensions)) {
+      if (normalizeName(import_node_path4.basename(file, import_node_path4.extname(file))) === target) {
+        hits.push({ path: displayPath(src, file), file });
+      }
+    }
+  }
+  const first = hits[0];
+  if (!first)
+    return { kind: "not-found" };
+  if (hits.length > 1)
+    return { kind: "ambiguous", candidates: hits.map((h) => h.path) };
+  return { kind: "file", path: first.path, content: import_node_fs3.readFileSync(first.file, "utf8") };
+}
+
+// src/term.ts
+var enabled = !process.env.NO_COLOR && (process.stdout.isTTY === true || process.env.FORCE_COLOR !== undefined);
+function style(open, close) {
+  return (s) => enabled ? `\x1B[${open}m${s}\x1B[${close}m` : s;
+}
+var bold = style(1, 22);
+var dim = style(2, 22);
+var cyan = style(36, 39);
+var yellow = style(33, 39);
+var green = style(32, 39);
+var red = style(31, 39);
+
 // src/cli.ts
-var HELP = `fivem-skills v${VERSION} — lokalne mirrory dokumentacji FiveM + wyszukiwarka
+var sourceLines = SOURCES.map((s) => `  ${s.name.padEnd(9)}${s.description.padEnd(52)}${s.repo}`).join(`
+`);
+var HELP = `fivem-skills v${VERSION} — local FiveM documentation mirrors with offline search
 
-Użycie:
-  fivem-skills pull [źródło...]         Pobierz/zaktualizuj źródła (domyślnie wszystkie)
-  fivem-skills search <fraza> [opcje]   Przeszukaj pobrane dokumenty
-  fivem-skills list                     Pokaż źródła i ich status
-  fivem-skills sources add <nazwa> <owner/repo> [--subpath <ścieżka>] [--ext .md,.mdx] [--desc <opis>]
-  fivem-skills sources remove <nazwa>   Usuń źródło użytkownika
+Usage:
+  fivem-skills pull [source...]        Download or update sources (default: all)
+  fivem-skills search <query> [opts]   Search the downloaded docs
+  fivem-skills show <path|name>...     Print full doc files
+  fivem-skills list                    Show sources and their status
 
-Opcje search:
-  -s, --source <nazwa>   Ogranicz do jednego źródła (docs | natives | ox | ...)
-  -e, --regex            Traktuj frazę jako wyrażenie regularne
-  -c, --case-sensitive   Rozróżniaj wielkość liter
-  -l, --limit <n>        Maks. liczba plików w wynikach (domyślnie 20)
+Sources:
+${sourceLines}
 
-Dane trafiają do: ${DATA_DIR}`;
+Search options:
+  -s, --source <name>    Limit to one source: ${SOURCES.map((s) => s.name).join(" | ")}
+  -e, --regex            Treat the whole query as a regular expression
+  -c, --case-sensitive   Match case exactly
+  -l, --limit <n>        Max files in results (default 20)
+
+Matching rules:
+  - multiple words = AND: every word must appear in the file (name or content)
+  - words are also split on camelCase boundaries: SafePed ≡ safe ped
+  - native names are normalized: GET_PLAYER_PED finds GetPlayerPed.md
+  - ranking: exact file name > partial file name > content-only matches
+
+Show:
+  fivem-skills show natives/PATHFIND/GetSafeCoordForPed.md   # path from search results
+  fivem-skills show GetSafeCoordForPed                       # bare native/file name works too
+
+Data root: ${DATA_DIR}`;
 function fail(message) {
   console.error(message);
   process.exit(1);
 }
 function cmdPull(args) {
-  const all = getAllSources();
-  const targets = args.length === 0 ? all : args.map((name) => findSource(name) ?? fail(`Nieznane źródło: ${name}. Dostępne: ${all.map((s) => s.name).join(", ")}`));
+  const targets = args.length === 0 ? SOURCES : args.map((name) => findSource(name) ?? fail(`Unknown source: ${name}. Available: ${SOURCES.map((s) => s.name).join(", ")}`));
   for (const src of targets) {
-    const verb = isPulled(src) ? "Aktualizuję" : "Pobieram";
-    console.log(`${verb} ${src.name} (${src.repo}${src.subpath ? `/${src.subpath}` : ""})...`);
+    const wasPulled = isPulled(src);
+    console.log(`${wasPulled ? "Updating" : "Cloning"} ${bold(src.name)} ${dim(`(${src.repo}${src.subpath ? `/${src.subpath}` : ""})`)}`);
     const { updated, rev } = pullSource(src);
-    const files = countFiles(src);
-    console.log(`  ${updated ? "OK" : "Bez zmian"} @ ${rev}, plików: ${files}`);
+    const status = !wasPulled ? green(`cloned @ ${rev}`) : updated ? green(`updated @ ${rev}`) : dim(`already up to date @ ${rev}`);
+    console.log(`  ${status}${dim(`, ${countFiles(src)} files`)}`);
   }
+}
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function buildHighlightRegex(query, regexMode, caseSensitive) {
+  const flags = caseSensitive ? "g" : "gi";
+  if (regexMode) {
+    try {
+      return new RegExp(query, flags);
+    } catch {
+      return null;
+    }
+  }
+  const terms = splitTerms(query).map(escapeRegExp);
+  return terms.length > 0 ? new RegExp(terms.join("|"), flags) : null;
 }
 function cmdSearch(args) {
   const { values, positionals } = import_node_util.parseArgs({
@@ -227,24 +325,24 @@ function cmdSearch(args) {
   });
   const query = positionals.join(" ").trim();
   if (!query)
-    fail("Podaj frazę do wyszukania, np.: fivem-skills search GetPlayerPed");
-  let sources = getAllSources();
+    fail("Provide a search query, e.g.: fivem-skills search GetPlayerPed");
+  let sources = SOURCES;
   if (values.source) {
     const src = findSource(values.source);
     if (!src)
-      fail(`Nieznane źródło: ${values.source}. Dostępne: ${sources.map((s) => s.name).join(", ")}`);
+      fail(`Unknown source: ${values.source}. Available: ${SOURCES.map((s) => s.name).join(", ")}`);
     sources = [src];
   }
   const notPulled = sources.filter((s) => !isPulled(s));
   if (notPulled.length === sources.length) {
-    fail(`Brak pobranych danych. Najpierw uruchom: fivem-skills pull`);
+    fail("No data downloaded yet. Run: fivem-skills pull");
   }
   for (const s of notPulled) {
-    console.error(`Uwaga: źródło "${s.name}" nie jest pobrane (fivem-skills pull ${s.name}) — pomijam.`);
+    console.error(red(`Warning: source "${s.name}" is not pulled (fivem-skills pull ${s.name}) — skipping.`));
   }
   const limit = Number.parseInt(values.limit, 10);
   if (Number.isNaN(limit) || limit < 1)
-    fail(`Nieprawidłowy limit: ${values.limit}`);
+    fail(`Invalid limit: ${values.limit}`);
   const results = searchSources(sources.filter(isPulled), query, {
     regex: values.regex,
     caseSensitive: values["case-sensitive"],
@@ -252,74 +350,54 @@ function cmdSearch(args) {
     linesPerFile: 5
   });
   if (results.length === 0) {
-    console.log(`Brak wyników dla: ${query}`);
+    console.log(`No results for "${query}". Try fewer or shorter words, or -e for regex.`);
     return;
   }
-  console.log(`Katalog danych: ${DATA_DIR}
-`);
+  const highlightRe = buildHighlightRegex(query, values.regex, values["case-sensitive"]);
   for (const match of results) {
-    console.log(`${match.path}${match.nameMatch ? "  (nazwa pliku)" : ""}`);
+    const label = match.nameMatch ? `  ${green("(file name match)")}` : "";
+    console.log(`${cyan(bold(match.path))}${label}`);
+    const numWidth = Math.max(...match.lines.map((l) => String(l.line).length), 1);
     for (const { line, text } of match.lines) {
-      console.log(`  ${line}: ${text}`);
+      const shown = highlightRe ? text.replace(highlightRe, (m) => yellow(bold(m))) : text;
+      console.log(`  ${dim(String(line).padStart(numWidth))} ${dim("|")} ${shown}`);
     }
+    if (match.totalHits > match.lines.length) {
+      console.log(`  ${dim(`+ ${match.totalHits - match.lines.length} more matching lines`)}`);
+    }
+    console.log();
   }
-  console.log(`
-Plików z trafieniami: ${results.length}${results.length === limit ? ` (limit ${limit} — zawęź frazę lub zwiększ -l)` : ""}`);
+  const limitNote = results.length === limit ? ` — limit reached, narrow the query or raise -l` : "";
+  console.log(dim(`${results.length} file(s) matched${limitNote} · full file: fivem-skills show <path>`));
+}
+function cmdShow(args) {
+  if (args.length === 0) {
+    fail("Provide a file path or name, e.g.: fivem-skills show GetSafeCoordForPed");
+  }
+  for (const arg of args) {
+    const result = resolveShow(arg);
+    if (result.kind === "not-found") {
+      fail(`No file matches "${arg}". Find one with: fivem-skills search ${arg}`);
+    }
+    if (result.kind === "ambiguous") {
+      console.log(`Multiple files match "${arg}" — pass a full path:`);
+      for (const candidate of result.candidates)
+        console.log(`  ${cyan(candidate)}`);
+      continue;
+    }
+    console.log(cyan(bold(result.path)));
+    console.log(result.content);
+  }
 }
 function cmdList() {
-  console.log(`Katalog danych: ${DATA_DIR}
-`);
-  const userNames = new Set(getUserSources().map((s) => s.name));
-  for (const src of getAllSources()) {
-    const origin = userNames.has(src.name) ? "użytkownika" : "wbudowane";
-    const status = isPulled(src) ? `pobrane, plików: ${countFiles(src)}, ostatni commit: ${lastCommitDate(src)}` : "nie pobrane";
-    console.log(`${src.name}  [${origin}]  ${src.repo}${src.subpath ? `/${src.subpath}` : ""}`);
-    console.log(`  ${src.description}`);
-    console.log(`  ${status}
-`);
-  }
-}
-function cmdSources(args) {
-  const action = args[0];
-  if (action === "add") {
-    const { values, positionals } = import_node_util.parseArgs({
-      args: args.slice(1),
-      allowPositionals: true,
-      options: {
-        subpath: { type: "string" },
-        ext: { type: "string", default: ".md,.mdx" },
-        desc: { type: "string", default: "" }
-      }
-    });
-    const [name, repo] = positionals;
-    if (!name || !repo)
-      fail("Użycie: fivem-skills sources add <nazwa> <owner/repo> [--subpath ...] [--ext .md,.mdx] [--desc ...]");
-    if (!/^[\w.-]+\/[\w.-]+$/.test(repo))
-      fail(`Nieprawidłowy format repo (oczekiwano owner/repo): ${repo}`);
-    if (BUILTIN_SOURCES.some((s) => s.name === name))
-      fail(`Nazwa "${name}" jest zajęta przez źródło wbudowane.`);
-    const source = {
-      name,
-      repo,
-      subpath: values.subpath,
-      extensions: values.ext.split(",").map((e) => e.startsWith(".") ? e : `.${e}`),
-      description: values.desc
-    };
-    const user = getUserSources().filter((s) => s.name !== name);
-    user.push(source);
-    saveUserSources(user);
-    console.log(`Dodano źródło "${name}" (${SOURCES_FILE}). Pobierz je: fivem-skills pull ${name}`);
-  } else if (action === "remove") {
-    const name = args[1];
-    if (!name)
-      fail("Użycie: fivem-skills sources remove <nazwa>");
-    const user = getUserSources();
-    if (!user.some((s) => s.name === name))
-      fail(`Brak źródła użytkownika o nazwie "${name}".`);
-    saveUserSources(user.filter((s) => s.name !== name));
-    console.log(`Usunięto źródło "${name}". Dane w ${DATA_DIR} pozostały — usuń je ręcznie, jeśli chcesz.`);
-  } else {
-    fail("Użycie: fivem-skills sources <add|remove> ...");
+  console.log(dim(`Data root: ${DATA_DIR}`));
+  console.log();
+  const nameWidth = Math.max(...SOURCES.map((s) => s.name.length)) + 2;
+  const statusWidth = 24;
+  for (const src of SOURCES) {
+    const status = isPulled(src) ? `${String(countFiles(src)).padStart(5)} files   ${lastCommitDate(src)}` : red("not pulled".padEnd(statusWidth));
+    const repoPath = `${src.repo}${src.subpath ? `/${src.subpath}` : ""}`;
+    console.log(`${bold(src.name.padEnd(nameWidth))}${status.padEnd(statusWidth)}   ${dim(repoPath)}`);
   }
 }
 function main() {
@@ -329,10 +407,10 @@ function main() {
       return cmdPull(rest);
     case "search":
       return cmdSearch(rest);
+    case "show":
+      return cmdShow(rest);
     case "list":
       return cmdList();
-    case "sources":
-      return cmdSources(rest);
     case "--version":
     case "-v":
       return void console.log(VERSION);
@@ -342,7 +420,7 @@ function main() {
     case undefined:
       return void console.log(HELP);
     default:
-      fail(`Nieznana komenda: ${command}
+      fail(`Unknown command: ${command}
 
 ${HELP}`);
   }

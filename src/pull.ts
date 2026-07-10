@@ -7,9 +7,9 @@ import { walkFiles } from "./search";
 
 function git(args: string[], cwd?: string): string {
   const res = spawnSync("git", args, { cwd, encoding: "utf8" });
-  if (res.error) throw new Error(`Nie udało się uruchomić git: ${res.error.message}`);
+  if (res.error) throw new Error(`Failed to run git: ${res.error.message}`);
   if (res.status !== 0) {
-    throw new Error(`git ${args.join(" ")} zakończył się błędem:\n${res.stderr.trim()}`);
+    throw new Error(`git ${args.join(" ")} failed:\n${res.stderr.trim()}`);
   }
   return res.stdout;
 }
@@ -23,9 +23,9 @@ export function isPulled(src: Source): boolean {
 }
 
 /**
- * Pobiera lub aktualizuje źródło przez płytki klon gita.
- * Dla źródeł z subpath używa sparse-checkout — pełne tarballe potrafią
- * ważyć setki MB (fivem-docs: 274 MB), sparse clone samych docs to ~4 MB.
+ * Downloads or updates a source via a shallow git clone.
+ * Sources with a subpath use sparse-checkout — full tarballs can weigh
+ * hundreds of MB (fivem-docs: 274 MB), a sparse clone of the docs is ~4 MB.
  */
 export function pullSource(src: Source): { updated: boolean; rev: string } {
   const dir = sourceDir(src);
