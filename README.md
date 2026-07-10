@@ -26,7 +26,7 @@ From a local clone: `bun install && bun run build && bun link`.
 The repo ships [`SKILL.md`](SKILL.md) — an agent skill teaching the search → show workflow. Install it into a project with [skills](https://github.com/vercel-labs/skills):
 
 ```bash
-bunx skills add @anx-scripts/fivem-skills     # or: npx skills add @anx-scripts/fivem-skills
+bunx skills add anx-scripts/fivem-skills     # or: npx skills add anx-scripts/fivem-skills
 ```
 
 The skill tells the agent to prompt for a global CLI install when `fivem-skills` is missing, so installing the skill alone is enough to bootstrap.
