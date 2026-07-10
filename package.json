@@ -1,22 +1,26 @@
 {
   "name": "@anx-scripts/fivem-skills",
-  "version": "0.4.0",
+  "version": "0.4.2",
   "description": "Local FiveM documentation mirrors (docs, natives, Overextended) with offline search CLI",
   "type": "module",
   "bin": {
-    "fivem-skills": "./dist/cli.cjs"
+    "fivem-skills": "dist/cli.cjs"
   },
   "scripts": {
     "dev": "bun run src/cli.ts",
     "build": "bun build src/cli.ts --outfile dist/cli.cjs --target node --format cjs",
     "typecheck": "tsc --noEmit"
   },
+  "files": [
+    "dist",
+    "SKILL.md"
+  ],
   "devDependencies": {
     "@types/bun": "latest",
     "typescript": "^7.0.2"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/anx-scripts/fivem-skills.git"
+    "url": "git+https://github.com/anx-scripts/fivem-skills.git"
   }
 }
