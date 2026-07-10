@@ -1,0 +1,18 @@
+{
+  "name": "fivem-skills",
+  "version": "0.1.0",
+  "description": "Lokalne mirrory dokumentacji FiveM (docs, natives, Overextended) + wyszukiwarka CLI",
+  "type": "module",
+  "bin": {
+    "fivem-skills": "./dist/cli.cjs"
+  },
+  "scripts": {
+    "dev": "bun run src/cli.ts",
+    "build": "bun build src/cli.ts --outfile dist/cli.cjs --target node --format cjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^7.0.2"
+  }
+}
