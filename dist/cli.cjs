@@ -6,7 +6,7 @@ var import_node_util = require("node:util");
 // src/constants.ts
 var import_node_os = require("node:os");
 var import_node_path = require("node:path");
-var VERSION = "0.4.2";
+var VERSION = "0.5.1";
 var ROOT_DIR = import_node_path.join(import_node_os.homedir(), ".fivem-skills");
 var DATA_DIR = import_node_path.join(ROOT_DIR, "data");
 

@@ -1,6 +1,6 @@
 {
   "name": "@anx-scripts/fivem-skills",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Local FiveM documentation mirrors (docs, natives, Overextended) with offline search CLI",
   "type": "module",
   "bin": {
