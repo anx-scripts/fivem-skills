@@ -23,7 +23,7 @@ From a local clone: `bun install && bun run build && bun link`.
 
 ## Using with AI agents
 
-The repo ships [`SKILL.md`](SKILL.md) — an agent skill teaching the search → show workflow. Install it into a project with [skills](https://github.com/vercel-labs/skills):
+The repo ships [`SKILL.md`](SKILL.md) — an agent skill teaching the search → read-the-printed-path workflow. Install it into a project with [skills](https://github.com/vercel-labs/skills):
 
 ```bash
 bunx skills add anx-scripts/fivem-skills     # or: npx skills add anx-scripts/fivem-skills
@@ -41,9 +41,6 @@ fivem-skills search GetPlayerPed              # search everywhere
 fivem-skills search "ox_lib callback" -s ox   # AND within the ox source
 fivem-skills search "SET_PED_.*" -e -l 50     # regex, limit 50 files
 
-fivem-skills show GetSafeCoordForPed          # print a full doc by native/file name
-fivem-skills show docs/scripting-manual/networking/state-bags.md   # or by search-result path
-
 fivem-skills list                 # source status
 ```
 
@@ -54,7 +51,7 @@ fivem-skills list                 # source status
 - **Native name normalization** — `GET_PLAYER_PED`, `GetPlayerPed` and `getplayerped` are the same query; underscores and case don't matter when matching file names.
 - **Ranking** — exact file name match > partial file name match > content-only matches (sorted by number of matching lines).
 - Results show up to 5 matching lines per file, **preferring markdown headings** — for a native that surfaces its `## NATIVE_NAME` signature heading instead of enum entries.
-- Result paths are `<source>/<path-inside-docs>` (the repo's `content/docs` prefix is stripped). Feed any of them to `fivem-skills show <path>` to print the whole file; `show` also accepts a bare native/file name (`show GetSafeCoordForPed`, `show SET_PED_CONFIG_FLAG`).
+- Each result prints the file's **absolute on-disk path**. `search` only finds and previews — read a file by opening that path with your own editor/grep tools, so you pull just the lines you need (native files are tiny; the `docs/.../game-references/*` files are huge lookup tables — grep them, never read whole).
 - Output is colorized on interactive terminals only (respects `NO_COLOR`); piped output stays plain.
 
 ## Development

@@ -6,7 +6,7 @@ var import_node_util = require("node:util");
 // src/constants.ts
 var import_node_os = require("node:os");
 var import_node_path = require("node:path");
-var VERSION = "0.5.1";
+var VERSION = "0.6.0";
 var ROOT_DIR = import_node_path.join(import_node_os.homedir(), ".fivem-skills");
 var DATA_DIR = import_node_path.join(ROOT_DIR, "data");
 
@@ -65,14 +65,6 @@ function* walkFiles(dir, extensions) {
 }
 function normalizeName(s) {
   return s.toLowerCase().replace(/[_\s-]/g, "");
-}
-function displayPath(src, file) {
-  const sourceRoot = import_node_path2.join(DATA_DIR, src.name);
-  const contentRoot = src.subpath ? import_node_path2.join(sourceRoot, src.subpath) : sourceRoot;
-  let rel = import_node_path2.relative(contentRoot, file).replaceAll("\\", "/");
-  if (rel.startsWith(".."))
-    rel = import_node_path2.relative(sourceRoot, file).replaceAll("\\", "/");
-  return `${src.name}/${rel}`;
 }
 function splitTerms(query) {
   return query.split(/\s+/).flatMap((word) => word.split(/(?<=[a-z0-9])(?=[A-Z])/)).filter(Boolean);
@@ -133,7 +125,7 @@ function searchSources(sources, query, opts) {
       const nameMatch = nameHits.every(Boolean);
       const rank = normalizeName(base) === queryNorm ? 0 : nameMatch ? 1 : 2;
       ranked.push({
-        path: displayPath(src, file),
+        path: file,
         nameMatch,
         totalHits,
         lines: pickLines(lines, opts.linesPerFile),
@@ -197,49 +189,6 @@ function lastCommitDate(src) {
   }
 }
 
-// src/show.ts
-var import_node_fs3 = require("node:fs");
-var import_node_path4 = require("node:path");
-function resolveShow(arg) {
-  const clean = arg.replaceAll("\\", "/").replace(/^\.?\//, "");
-  if (clean.includes("/")) {
-    const [srcName = "", ...restParts] = clean.split("/");
-    const src = findSource(srcName);
-    if (!src)
-      return { kind: "not-found" };
-    const rest = restParts.join("/");
-    const bases = [
-      import_node_path4.join(sourceDir(src), ...src.subpath ? [src.subpath] : [], rest),
-      import_node_path4.join(sourceDir(src), rest)
-    ];
-    for (const base of bases) {
-      for (const file of [base, ...src.extensions.map((ext) => base + ext)]) {
-        if (import_node_fs3.existsSync(file) && import_node_fs3.statSync(file).isFile()) {
-          return { kind: "file", path: displayPath(src, file), content: import_node_fs3.readFileSync(file, "utf8") };
-        }
-      }
-    }
-    return { kind: "not-found" };
-  }
-  const target = normalizeName(clean);
-  const hits = [];
-  for (const src of SOURCES) {
-    if (!isPulled(src))
-      continue;
-    for (const file of walkFiles(sourceDir(src), src.extensions)) {
-      if (normalizeName(import_node_path4.basename(file, import_node_path4.extname(file))) === target) {
-        hits.push({ path: displayPath(src, file), file });
-      }
-    }
-  }
-  const first = hits[0];
-  if (!first)
-    return { kind: "not-found" };
-  if (hits.length > 1)
-    return { kind: "ambiguous", candidates: hits.map((h) => h.path) };
-  return { kind: "file", path: first.path, content: import_node_fs3.readFileSync(first.file, "utf8") };
-}
-
 // src/term.ts
 var enabled = !process.env.NO_COLOR && (process.stdout.isTTY === true || process.env.FORCE_COLOR !== undefined);
 function style(open, close) {
@@ -260,7 +209,6 @@ var HELP = `fivem-skills v${VERSION} — local FiveM documentation mirrors with 
 Usage:
   fivem-skills pull [source...]        Download or update sources (default: all)
   fivem-skills search <query> [opts]   Search the downloaded docs
-  fivem-skills show <path|name>...     Print full doc files
   fivem-skills list                    Show sources and their status
 
 Sources:
@@ -278,9 +226,11 @@ Matching rules:
   - native names are normalized: GET_PLAYER_PED finds GetPlayerPed.md
   - ranking: exact file name > partial file name > content-only matches
 
-Show:
-  fivem-skills show natives/PATHFIND/GetSafeCoordForPed.md   # path from search results
-  fivem-skills show GetSafeCoordForPed                       # bare native/file name works too
+Reading files:
+  search prints each match's absolute path — read it directly with whatever tools you
+  have. Native files are tiny (read whole); the docs game-references are huge lookup
+  tables (e.g. vehicle-models) — search the path or read a line range for the row you
+  need, never the whole file.
 
 Data root: ${DATA_DIR}`;
 function fail(message) {
@@ -368,26 +318,7 @@ function cmdSearch(args) {
     console.log();
   }
   const limitNote = results.length === limit ? ` — limit reached, narrow the query or raise -l` : "";
-  console.log(dim(`${results.length} file(s) matched${limitNote} · full file: fivem-skills show <path>`));
-}
-function cmdShow(args) {
-  if (args.length === 0) {
-    fail("Provide a file path or name, e.g.: fivem-skills show GetSafeCoordForPed");
-  }
-  for (const arg of args) {
-    const result = resolveShow(arg);
-    if (result.kind === "not-found") {
-      fail(`No file matches "${arg}". Find one with: fivem-skills search ${arg}`);
-    }
-    if (result.kind === "ambiguous") {
-      console.log(`Multiple files match "${arg}" — pass a full path:`);
-      for (const candidate of result.candidates)
-        console.log(`  ${cyan(candidate)}`);
-      continue;
-    }
-    console.log(cyan(bold(result.path)));
-    console.log(result.content);
-  }
+  console.log(dim(`${results.length} file(s) matched${limitNote} · read a path above directly (grep huge files)`));
 }
 function cmdList() {
   console.log(dim(`Data root: ${DATA_DIR}`));
@@ -407,8 +338,6 @@ function main() {
       return cmdPull(rest);
     case "search":
       return cmdSearch(rest);
-    case "show":
-      return cmdShow(rest);
     case "list":
       return cmdList();
     case "--version":

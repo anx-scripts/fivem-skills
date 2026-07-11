@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export const VERSION = "0.5.1";
+export const VERSION = "0.6.0";
 
 /** Tool home directory — downloaded data lives here. */
 export const ROOT_DIR = join(homedir(), ".fivem-skills");

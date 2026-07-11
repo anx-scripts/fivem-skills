@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { basename, extname, join, relative } from "node:path";
+import { basename, extname, join } from "node:path";
 import { DATA_DIR } from "./constants";
 import type { Source } from "./sources";
 
@@ -13,7 +13,7 @@ export interface SearchOptions {
 }
 
 export interface FileMatch {
-  /** Source-rooted path with the repo subpath stripped, e.g. "docs/scripting-manual/..." */
+  /** Absolute on-disk path of the matched file — read it directly with an editor/grep tool. */
   path: string;
   /** Every query term matched the file name */
   nameMatch: boolean;
@@ -44,19 +44,6 @@ export function* walkFiles(dir: string, extensions: string[]): Generator<string>
 /** Comparison form for native names: GetPlayerPed ≡ GET_PLAYER_PED ≡ getplayerped */
 export function normalizeName(s: string): string {
   return s.toLowerCase().replace(/[_\s-]/g, "");
-}
-
-/**
- * User-facing path for a file: source name + path inside the repo subpath.
- * "docs/content/docs/x.md" on disk is shown as "docs/x.md"; `show` resolves it back.
- */
-export function displayPath(src: Source, file: string): string {
-  const sourceRoot = join(DATA_DIR, src.name);
-  const contentRoot = src.subpath ? join(sourceRoot, src.subpath) : sourceRoot;
-  let rel = relative(contentRoot, file).replaceAll("\\", "/");
-  // Sparse checkouts also materialize repo-root files (README etc.) outside the subpath.
-  if (rel.startsWith("..")) rel = relative(sourceRoot, file).replaceAll("\\", "/");
-  return `${src.name}/${rel}`;
 }
 
 /**
@@ -142,7 +129,7 @@ export function searchSources(sources: Source[], query: string, opts: SearchOpti
       const nameMatch = nameHits.every(Boolean);
       const rank = normalizeName(base) === queryNorm ? 0 : nameMatch ? 1 : 2;
       ranked.push({
-        path: displayPath(src, file),
+        path: file,
         nameMatch,
         totalHits,
         lines: pickLines(lines, opts.linesPerFile),

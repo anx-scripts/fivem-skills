@@ -4,7 +4,6 @@ import { DATA_DIR, VERSION } from "./constants";
 import { findSource, SOURCES } from "./sources";
 import { countFiles, isPulled, lastCommitDate, pullSource } from "./pull";
 import { searchSources, splitTerms } from "./search";
-import { resolveShow } from "./show";
 import { bold, cyan, dim, green, red, yellow } from "./term";
 
 const sourceLines = SOURCES.map(
@@ -16,7 +15,6 @@ const HELP = `fivem-skills v${VERSION} — local FiveM documentation mirrors wit
 Usage:
   fivem-skills pull [source...]        Download or update sources (default: all)
   fivem-skills search <query> [opts]   Search the downloaded docs
-  fivem-skills show <path|name>...     Print full doc files
   fivem-skills list                    Show sources and their status
 
 Sources:
@@ -34,9 +32,11 @@ Matching rules:
   - native names are normalized: GET_PLAYER_PED finds GetPlayerPed.md
   - ranking: exact file name > partial file name > content-only matches
 
-Show:
-  fivem-skills show natives/PATHFIND/GetSafeCoordForPed.md   # path from search results
-  fivem-skills show GetSafeCoordForPed                       # bare native/file name works too
+Reading files:
+  search prints each match's absolute path — read it directly with whatever tools you
+  have. Native files are tiny (read whole); the docs game-references are huge lookup
+  tables (e.g. vehicle-models) — search the path or read a line range for the row you
+  need, never the whole file.
 
 Data root: ${DATA_DIR}`;
 
@@ -141,26 +141,7 @@ function cmdSearch(args: string[]): void {
   }
 
   const limitNote = results.length === limit ? ` — limit reached, narrow the query or raise -l` : "";
-  console.log(dim(`${results.length} file(s) matched${limitNote} · full file: fivem-skills show <path>`));
-}
-
-function cmdShow(args: string[]): void {
-  if (args.length === 0) {
-    fail("Provide a file path or name, e.g.: fivem-skills show GetSafeCoordForPed");
-  }
-  for (const arg of args) {
-    const result = resolveShow(arg);
-    if (result.kind === "not-found") {
-      fail(`No file matches "${arg}". Find one with: fivem-skills search ${arg}`);
-    }
-    if (result.kind === "ambiguous") {
-      console.log(`Multiple files match "${arg}" — pass a full path:`);
-      for (const candidate of result.candidates) console.log(`  ${cyan(candidate)}`);
-      continue;
-    }
-    console.log(cyan(bold(result.path)));
-    console.log(result.content);
-  }
+  console.log(dim(`${results.length} file(s) matched${limitNote} · read a path above directly (grep huge files)`));
 }
 
 function cmdList(): void {
@@ -185,8 +166,6 @@ function main(): void {
       return cmdPull(rest);
     case "search":
       return cmdSearch(rest);
-    case "show":
-      return cmdShow(rest);
     case "list":
       return cmdList();
     case "--version":
